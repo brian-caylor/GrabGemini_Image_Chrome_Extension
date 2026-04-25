@@ -1,8 +1,7 @@
 // --- CONFIGURATION ---
 const SELECTORS = {
     cardContainer: '.library-item-card-container',
-    openImageBtn: 'div[aria-label^="Preview or open"]',
-    downloadBtn: 'button[aria-label="Download full size image"], button[data-test-id="download-generated-image-button"]'
+    openImageBtn: 'div[aria-label^="Preview or open"]'
 };
 
 // --- STATE ---
@@ -117,112 +116,46 @@ function deselectAll() {
     });
 }
 
-// --- HELPER: WAIT FOR NATIVE DOWNLOAD BUTTON ---
-function waitForLightboxDownloadButton(timeout) {
-    return new Promise((resolve) => {
-        const checkForBtn = () => {
-            const dlBtn = document.querySelector(SELECTORS.downloadBtn);
-            return (dlBtn && dlBtn.getBoundingClientRect().width > 0) ? dlBtn : null;
-        };
-
-        let found = checkForBtn();
-        if (found) return resolve(found);
-
-        const interval = setInterval(() => {
-            found = checkForBtn();
-            if (found) {
-                clearInterval(interval);
-                resolve(found);
-            }
-        }, 50);
-
-        setTimeout(() => {
-            clearInterval(interval);
-            resolve(null);
-        }, timeout);
-    });
-}
-
-// --- HELPER: WAIT FOR MODAL TO VANISH ---
-function waitForModalToClose(timeout = 2000) {
-    return new Promise((resolve) => {
-        const isClosed = () => {
-            const dlBtn = document.querySelector(SELECTORS.downloadBtn);
-            return !dlBtn || dlBtn.getBoundingClientRect().width === 0;
-        };
-
-        if (isClosed()) return resolve();
-
-        const interval = setInterval(() => {
-            if (isClosed()) {
-                clearInterval(interval);
-                resolve();
-            }
-        }, 50);
-
-        setTimeout(() => {
-            clearInterval(interval);
-            resolve();
-        }, timeout);
-    });
-}
-
-// --- THE SUPERCHARGED LIGHTBOX DANCE (GEMINI EDITION) ---
+// --- THE INSTANT API DANCE ---
 async function downloadSelected() {
-    let initialCount = document.querySelectorAll('.bulk-checkbox:checked').length;
-    if (initialCount === 0) {
+    const checkedBoxes = document.querySelectorAll('.bulk-checkbox:checked');
+    if (checkedBoxes.length === 0) {
         alert("Please select at least one image.");
         return;
     }
 
-    const confirmMsg = `Ready to blast through ${initialCount} images? \n\nCRITICAL: Keep your hands off the mouse and keyboard while the script runs!`;
+    // THE NEW, SPEED-FOCUSED CONFIRMATION PROMPT
+    const confirmMsg = `Ready to instantly download ${checkedBoxes.length} images?\n\nClick OK to blast them straight to your downloads folder!`;
     if (!confirm(confirmMsg)) return;
 
     const execBtn = document.getElementById('bulk-dl-execute');
-    let currentIteration = 1;
-
-    while (document.querySelectorAll('.bulk-checkbox:checked').length > 0) {
-        execBtn.textContent = `Downloading ${currentIteration}/${initialCount}...`;
+    
+    for (let i = 0; i < checkedBoxes.length; i++) {
+        execBtn.textContent = `Downloading ${i + 1}/${checkedBoxes.length}...`;
         
-        const activeCheckbox = document.querySelectorAll('.bulk-checkbox:checked')[0];
-        const container = activeCheckbox.closest(SELECTORS.cardContainer);
+        const container = checkedBoxes[i].closest(SELECTORS.cardContainer);
+        if (!container) continue;
 
-        if (!container) {
-            activeCheckbox.checked = false;
-            activeCheckbox.dispatchEvent(new Event('change'));
-            continue;
-        }
-
-        const openBtn = container.querySelector(SELECTORS.openImageBtn);
-
-        if (openBtn) {
-            openBtn.scrollIntoView({ behavior: 'instant', block: 'center' });
-            await new Promise(r => setTimeout(r, 100));
-
-            openBtn.click();
-
-            const dlBtn = await waitForLightboxDownloadButton(3000);
+        // Target the low-res thumbnail image inside the card
+        const imgElement = container.querySelector('img[src*="googleusercontent"]');
+        
+        if (imgElement && imgElement.src) {
+            // Google CDN Magic: Split the URL at the '=' to remove the compression sizing 
+            // and append '=s0' to request the raw, uncompressed master file.
+            const highResUrl = imgElement.src.split('=')[0] + '=s0';
             
-            if (dlBtn) {
-                dlBtn.click();
-                
-                await new Promise(r => setTimeout(r, 450));
+            // Send the raw URL to our background script to bypass Chrome's security locks
+            chrome.runtime.sendMessage({ 
+                action: "downloadImage", 
+                url: highResUrl 
+            });
 
-                document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', code: 'Escape', keyCode: 27, bubbles: true }));
-                
-                await waitForModalToClose(); 
-                await new Promise(r => setTimeout(r, 200)); // Breather for Angular UI to settle
-            } else {
-                document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', code: 'Escape', keyCode: 27, bubbles: true }));
-                await waitForModalToClose();
-                await new Promise(r => setTimeout(r, 200)); 
-            }
+            // A tiny 200ms pause just so we don't accidentally overload the background processor
+            await new Promise(r => setTimeout(r, 200));
         }
         
-        activeCheckbox.checked = false;
-        activeCheckbox.dispatchEvent(new Event('change'));
-        
-        currentIteration++;
+        checkedBoxes[i].checked = false;
+        checkedBoxes[i].dispatchEvent(new Event('change'));
     }
 
     execBtn.textContent = "Done!";
