@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
   "name": "GrabGemini - Bulk Image Downloader",
-  "version": "1.2",
-  "description": "Bulk select and download high-res images from Gemini's My Stuff gallery.",
+  "version": "1.6.0",
+  "description": "Bulk select and download high-res images, videos, and music from Gemini's Library.",
   "permissions": [
     "downloads"
   ],
