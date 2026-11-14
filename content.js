@@ -1,8 +1,46 @@
 // --- CONFIGURATION ---
+// Gemini changes its markup from time to time, so each lookup tries a list of
+// selectors in order. The first entry is the one the My Stuff gallery used when
+// this extension shipped; the rest are looser fallbacks.
 const SELECTORS = {
-    cardContainer: '.library-item-card-container',
+    cardContainers: [
+        '.library-item-card-container',
+        '[class*="library-item-card"]',
+        '[class*="library-item"][class*="container"]'
+    ],
+    // A card qualifies if it holds a generated image. This does not depend on
+    // the UI language, unlike the old aria-label check.
+    cardImage: 'img[src*="googleusercontent"]',
+    // Kept as a secondary signal for cards whose image hasn't loaded yet.
+    // English-only, so it is never required on its own.
     openImageBtn: 'div[aria-label^="Preview or open"]'
 };
+
+const CARD_ATTR = 'data-grabgemini-card';
+const LOG_PREFIX = '[GrabGemini]';
+let warnedNoQualifyingCards = false;
+
+// --- HELPER: FIND CARDS ---
+function findCards() {
+    for (const selector of SELECTORS.cardContainers) {
+        const cards = document.querySelectorAll(selector);
+        if (cards.length > 0) return { cards, selector };
+    }
+    return { cards: [], selector: null };
+}
+
+// Fallback selectors are loose, so there a card must hold exactly one image;
+// that keeps a whole grid wrapper from being treated as one card.
+function cardQualifies(container, isFallback) {
+    const images = container.querySelectorAll(SELECTORS.cardImage).length;
+    if (isFallback && images > 1) return false;
+    return images > 0 || container.querySelector(SELECTORS.openImageBtn) !== null;
+}
+
+// The card a checkbox belongs to, whichever selector matched it.
+function cardOf(checkbox) {
+    return checkbox.closest(`[${CARD_ATTR}]`);
+}
 
 // --- STATE ---
 let isDragging = false;
@@ -12,7 +50,7 @@ let selectionBox = null;
 
 // --- HELPER: CHECK PAGE ---
 function isMyStuffPage() {
-    return document.querySelector(SELECTORS.cardContainer) !== null;
+    return findCards().cards.length > 0;
 }
 
 // --- INITIALIZE UI ---
@@ -56,13 +94,20 @@ function injectControlPanel() {
 
 // --- CORE LOGIC ---
 function attachCheckboxes() {
-    if (!isMyStuffPage()) return;
+    const { cards, selector } = findCards();
+    if (cards.length === 0) return;
 
-    const cards = document.querySelectorAll(SELECTORS.cardContainer);
-    
+    const isFallback = selector !== SELECTORS.cardContainers[0];
+    let qualifying = 0;
+
     cards.forEach(container => {
-        if (!container.querySelector(SELECTORS.openImageBtn)) return;
+        // Fallback selectors can match nested elements; only use the outermost card.
+        if (container.parentElement && container.parentElement.closest(`[${CARD_ATTR}]`)) return;
+        if (!cardQualifies(container, isFallback)) return;
+        qualifying++;
         if (container.querySelector('.bulk-checkbox')) return;
+
+        container.setAttribute(CARD_ATTR, '');
 
         if (getComputedStyle(container).position === 'static') {
             container.style.position = 'relative';
@@ -88,6 +133,13 @@ function attachCheckboxes() {
         cbWrapper.appendChild(cb);
         container.appendChild(cbWrapper);
     });
+
+    // Cards were found but none look like image cards: Gemini's markup has
+    // probably changed again. Say so once instead of failing silently.
+    if (qualifying === 0 && !warnedNoQualifyingCards) {
+        warnedNoQualifyingCards = true;
+        console.warn(`${LOG_PREFIX} Found ${cards.length} cards with "${selector}" but none contain an image matching "${SELECTORS.cardImage}". Gemini's page structure may have changed.`);
+    }
 }
 
 function updateDownloadCount() {
@@ -133,11 +185,11 @@ async function downloadSelected() {
     for (let i = 0; i < checkedBoxes.length; i++) {
         execBtn.textContent = `Downloading ${i + 1}/${checkedBoxes.length}...`;
         
-        const container = checkedBoxes[i].closest(SELECTORS.cardContainer);
+        const container = cardOf(checkedBoxes[i]);
         if (!container) continue;
 
         // Target the low-res thumbnail image inside the card
-        const imgElement = container.querySelector('img[src*="googleusercontent"]');
+        const imgElement = container.querySelector(SELECTORS.cardImage);
         
         if (imgElement && imgElement.src) {
             // Google CDN Magic: Split the URL at the '=' to remove the compression sizing 
@@ -211,7 +263,7 @@ function checkCollisions(boxX, boxY, boxW, boxH) {
     const checkboxes = document.querySelectorAll('.bulk-checkbox');
 
     checkboxes.forEach(cb => {
-        const container = cb.closest(SELECTORS.cardContainer);
+        const container = cardOf(cb);
         if (!container) return;
 
         const rect = container.getBoundingClientRect();
